@@ -563,6 +563,14 @@ class PythonVisitor(ast.NodeVisitor):
             return Assign(ref, Prim('mult#', [Var(ref), value]))
         else:
             raise NotImplementedError(ast.dump(node))
+    def visit_Constant(self, node):
+        if isinstance(node.value, int):
+            return LitInt(node.value)
+        elif isinstance(node.value, float):
+            return LitFloat(node.value)
+        elif isinstance(node.value, bool):
+            return LitBool(node.value)
+        raise NotImplementedError(ast.dump(node))
 
     def generic_visit(self, node):
         raise NotImplementedError(ast.dump(node))
