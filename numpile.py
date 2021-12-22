@@ -290,8 +290,8 @@ class TypeInfer(object):
         begin = self.visit(node.begin)
         end = self.visit(node.end)
         self.constraints += [(varty, int32), (
-            begin, int64), (end, int32)]
-        list(map(self.visit, node.body))
+            begin, int32), (end, int32)]
+        map(self.visit, node.body)
 
     def generic_visit(self, node):
         raise NotImplementedError
@@ -531,6 +531,7 @@ def dump(node):
 
 pointer     = ir.PointerType
 int_type    = ir.IntType(32)
+int64_type  = ir.IntType(64)
 float_type  = ir.FloatType()
 double_type = ir.DoubleType()
 bool_type   = ir.IntType(1)
@@ -553,12 +554,12 @@ def array_type(elt_type):
     return struct_type
 
 int32_array = pointer(array_type(int_type))
-int64_array = pointer(array_type(ir.IntType(64)))
+int64_array = pointer(array_type(int64_type))
 double_array = pointer(array_type(double_type))
 
 lltypes_map = {
     int32          : int_type,
-    int64          : int_type,
+    int64          : int64_type,
     float32        : float_type,
     double64       : double_type,
     array_int32    : int32_array,
@@ -639,6 +640,8 @@ class LLVMEmitter(object):
             return ir.Constant(double_type, node.n)
         elif ty == int_type:
             return ir.Constant(int_type, node.n)
+        elif ty == int64_type:
+            return ir.Constant(int64_type, node.n)
 
     def visit_LitFloat(self, node):
         ty = self.specialize(node)
@@ -803,6 +806,7 @@ class LLVMEmitter(object):
 # the appropriate C types for our JIT'd function at runtime.
 _nptypemap = {
     'i': ctypes.c_int,
+    'l': ctypes.c_int64,
     'f': ctypes.c_float,
     'd': ctypes.c_double,
 }
