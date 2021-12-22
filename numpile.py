@@ -1,21 +1,21 @@
 # LLVM based numeric specializer in 1000 lines.
 from __future__ import print_function
 
-from functools import reduce
-import sys
 import ast
-import types
 import ctypes
 import inspect
 import pprint
 import string
-import numpy as np
-
+import sys
+import types
+from collections import defaultdict, deque
+from functools import reduce
 from textwrap import dedent
-from collections import deque, defaultdict
 
-from llvmlite import ir
 import llvmlite.binding as llvm
+import llvmlite.llvmpy.core as lc
+import numpy as np
+from llvmlite import ir
 
 DEBUG = False
 
@@ -209,8 +209,8 @@ int64 = TCon('Int64')
 float32 = TCon('Float')
 double64 = TCon('Double')
 void = TCon('Void')
-def array(t): return TApp(TCon('Array'), t)
 
+array = lambda t: TApp(TCon('Array'), t)
 
 array_int32 = array(int32)
 array_int64 = array(int64)
@@ -296,7 +296,7 @@ class TypeInfer(object):
             self.constraints += [(tya, tyb)]
             return tyb
         else:
-            raise NotImplementedError
+            raise NotImplementedError(ast.dump(node))
 
     def visit_Var(self, node):
         ty = self.env[node.id]
@@ -317,13 +317,12 @@ class TypeInfer(object):
         list(map(self.visit, node.body))
 
     def generic_visit(self, node):
-        raise NotImplementedError
+        raise NotImplementedError(ast.dump(node))
 
 
 class UnderDetermined(Exception):
     def __str__(self):
-        return 'The types in the function are not fully determined by the \
-                input types. Add annotations.'
+        return 'The types in the function are not fully determined by the input types. Add annotations.'
 
 
 class InferError(Exception):
@@ -448,7 +447,7 @@ class PythonVisitor(ast.NodeVisitor):
         elif isinstance(source, str):
             source = dedent(source)
         else:
-            raise NotImplementedError
+            raise NotImplementedError(ast.dump(source))
 
         self._source = source
         self._ast = ast.parse(source)
@@ -507,16 +506,19 @@ class PythonVisitor(ast.NodeVisitor):
             val = self.visit(node.value)
             return Prim('shape#', [val])
         else:
-            raise NotImplementedError
+            raise NotImplementedError(ast.dump(node))
 
     def visit_Subscript(self, node):
         if isinstance(node.ctx, ast.Load):
             if node.slice:
                 val = self.visit(node.value)
-                ix = self.visit(node.slice.value)
+                ix = self.visit(node.slice)
                 return Index(val, ix)
         elif isinstance(node.ctx, ast.Store):
-            raise NotImplementedError
+            raise NotImplementedError(ast.dump(node))
+
+    def visit_int(self, node):
+        return LitInt(node, type=int64)
 
     def visit_For(self, node):
         target = self.visit(node.target)
@@ -531,6 +533,25 @@ class PythonVisitor(ast.NodeVisitor):
         elif len(args) == 2:  # xrange(n,m)
             return Loop(target, args[0], args[1], stmts)
 
+    def visit_If(self, node):
+        print('visit_If')
+        print(ast.dump(node))
+        # target = self.visit(node.target)
+        # stmts = list(map(self.visit, node.body))
+        # if node.iter.func.id in {'xrange', 'range'}:
+        #     args = list(map(self.visit, node.iter.args))
+        # else:
+        #     raise Exception('Loop must be over range')
+
+        # if len(args) == 1:   # xrange(n)
+        #     return Loop(target, LitInt(0, type=int64), args[0], stmts)
+        # elif len(args) == 2:  # xrange(n,m)
+        #     return Loop(target, args[0], args[1], stmts)
+
+    def visit_Compare(self, node):
+        print('visit_Compare')
+        print(ast.dump(node))
+
     def visit_AugAssign(self, node):
         if isinstance(node.op, ast.Add):
             ref = node.target.id
@@ -541,7 +562,7 @@ class PythonVisitor(ast.NodeVisitor):
             value = self.visit(node.value)
             return Assign(ref, Prim('mult#', [Var(ref), value]))
         else:
-            raise NotImplementedError
+            raise NotImplementedError(ast.dump(node))
 
     def generic_visit(self, node):
         raise NotImplementedError(ast.dump(node))
@@ -674,6 +695,7 @@ class LLVMEmitter(object):
 
     def specialize(self, val):
         if isinstance(val.type, TVar):
+            print('specialize', val.type.s)
             return to_lltype(self.spec_types[val.type.s])
         else:
             return val.type
@@ -686,8 +708,8 @@ class LLVMEmitter(object):
         elif isinstance(val, bool):
             return ir.Constant(bool_type, int(val))
         elif isinstance(val, str):
-            raise NotImplementedError
-            #return Constant.stringz(val)
+            # raise NotImplementedError
+            return lc.Constant.stringz(val)
         else:
             raise NotImplementedError
 
@@ -830,7 +852,7 @@ class LLVMEmitter(object):
             else:
                 return self.builder.add(a, b)
         else:
-            raise NotImplementedError
+            raise NotImplementedError(ast.dump(node))
 
     def visit_Assign(self, node):
         # Subsequent assignment
@@ -848,6 +870,7 @@ class LLVMEmitter(object):
             val = self.visit(node.val)
             ty = self.specialize(node)
             var = self.builder.alloca(ty, name=name)
+            # print('visit_Assign', type(node.val), node.val, var, sep='???')
             self.builder.store(val, var)
             self.locals[name] = var
             return var
