@@ -204,6 +204,7 @@ def is_array(ty):
     return isinstance(ty, TApp) and ty.a == TCon('Array')
 
 
+int32 = TCon('Int32')
 int64 = TCon('Int64')
 float32 = TCon('Float')
 double64 = TCon('Double')
@@ -211,6 +212,7 @@ void = TCon('Void')
 def array(t): return TApp(TCon('Array'), t)
 
 
+array_int32 = array(int32)
 array_int64 = array(int64)
 array_double64 = array(double64)
 
@@ -704,6 +706,8 @@ class LLVMEmitter(object):
             return ir.Constant(double_type, node.n)
         elif ty == int64_type:
             return ir.Constant(int64_type, node.n)
+        elif ty == int32_type:
+            return ir.Constant(int32_type, node.n)
 
     def visit_Noop(self, node):
         pass

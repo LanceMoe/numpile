@@ -2,13 +2,11 @@ from numpile import autojit
 
 
 @autojit
-def add(a, b):
-    for i in range(100):
-        a += 1
-    return a + b
+def is_prime(x):
+    for i in range(2, x):
+        if x % i == 0:
+            return False
+    return True
 
-
-a = 3.1415926
-b = 2.7182818
-result = add(a, b)
+result = is_prime(11)
 print(result)
