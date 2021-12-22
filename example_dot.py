@@ -11,7 +11,7 @@ def dot(a, b):
     return c
 
 
-a = np.arange(100, 200, dtype="int32")
-b = np.arange(300, 400, dtype="int32")
+a = np.arange(100, 200, dtype="int64")
+b = np.arange(300, 400, dtype="int64")
 result = dot(a, b)
 print(result)
