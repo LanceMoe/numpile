@@ -579,7 +579,6 @@ def dump(node):
 
 ### == LLVM Codegen ==
 
-
 pointer = ir.PointerType
 int32_type = ir.IntType(32)
 int64_type = ir.IntType(64)
@@ -606,16 +605,18 @@ def array_type(elt_type):
     )
     return struct_type
 
-
+int32_array = pointer(array_type(int32_type))
 int64_array = pointer(array_type(int64_type))
 double_array = pointer(array_type(double_type))
 
 lltypes_map = {
-    int64: int64_type,
-    float32: float_type,
-    double64: double_type,
-    array_int64: int64_array,
-    array_double64: double_array
+    int32          : int32_type,
+    int64          : int64_type,
+    float32        : float_type,
+    double64       : double_type,
+    array_int32    : int32_array,
+    array_int64    : int64_array,
+    array_double64 : double_array
 }
 
 
@@ -696,7 +697,6 @@ class LLVMEmitter(object):
             return ir.Constant(int64_type, node.n)
         elif ty == int32_type:
             return ir.Constant(int32_type, node.n)
-
 
     def visit_LitFloat(self, node):
         ty = self.specialize(node)
