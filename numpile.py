@@ -31,19 +31,19 @@ class Var(ast.AST):
 
 
 class Assign(ast.AST):
-    _fields = ['ref', 'val', 'type']
+    _fields = ['ref', 'value', 'type']
 
-    def __init__(self, ref, val, type=None):
+    def __init__(self, ref, value, type=None):
         self.ref = ref
-        self.val = val
+        self.value = value
         self.type = type
 
 
 class Return(ast.AST):
-    _fields = ['val']
+    _fields = ['value']
 
-    def __init__(self, val):
-        self.val = val
+    def __init__(self, value):
+        self.value = value
 
 
 class Loop(ast.AST):
@@ -77,7 +77,7 @@ class LitInt(ast.AST):
     _fields = ['n']
 
     def __init__(self, n, type=None):
-        self.n = n
+        self.n = int(n)
         self.type = type
 
 
@@ -85,7 +85,7 @@ class LitFloat(ast.AST):
     _fields = ['n']
 
     def __init__(self, n, type=None):
-        self.n = n
+        self.n = float(n)
         self.type = None
 
 
@@ -93,7 +93,7 @@ class LitBool(ast.AST):
     _fields = ['n']
 
     def __init__(self, n):
-        self.n = n
+        self.n = bool(n)
 
 
 class Prim(ast.AST):
@@ -105,10 +105,10 @@ class Prim(ast.AST):
 
 
 class Index(ast.AST):
-    _fields = ['val', 'ix']
+    _fields = ['value', 'ix']
 
-    def __init__(self, val, ix):
-        self.val = val
+    def __init__(self, value, ix):
+        self.value = value
         self.ix = ix
 
 
@@ -116,7 +116,24 @@ class Noop(ast.AST):
     _fields = []
 
 
-primops = {ast.Add: 'add#', ast.Mult: 'mult#'}
+prim_ops = {
+    ast.Add: 'add#',
+    ast.Mult: 'mult#',
+    ast.Sub: 'sub#',
+    ast.Div: 'div#',
+    ast.Pow: 'pow#',
+    ast.Mod: 'mod#',
+    ast.And: 'and#',
+    ast.Or: 'or#',
+    ast.Eq: 'eq#',
+    ast.NotEq: 'ne#',
+    ast.Lt: 'lt#',
+    ast.LtE: 'le#',
+    ast.Gt: 'gt#',
+    ast.GtE: 'ge#'
+}
+
+llvm_prim_ops = list(prim_ops.values())
 
 ### == Type System ==
 
@@ -223,7 +240,7 @@ def naming():
     k = 0
     while True:
         for a in string.ascii_lowercase:
-            yield ('\''+a+str(k)) if (k > 0) else (a)
+            yield f'\{a}{str(k)}' if (k > 0) else a
         k = k+1
 
 
@@ -239,6 +256,7 @@ class TypeInfer(object):
 
     def visit(self, node):
         name = f'visit_{type(node).__name__}'
+        print(name)
         if hasattr(self, name):
             return getattr(self, name)(node)
         else:
@@ -253,8 +271,14 @@ class TypeInfer(object):
         list(map(self.visit, node.body))
         return TFun(self.argtys, self.retty)
 
+    def visit_NoneType(self, node):
+        return None
+
     def visit_Noop(self, node):
         return None
+
+    def visit_If(self, node):
+        list(map(self.visit, node.body))
 
     def visit_LitInt(self, node):
         tv = self.fresh()
@@ -267,7 +291,7 @@ class TypeInfer(object):
         return tv
 
     def visit_Assign(self, node):
-        ty = self.visit(node.val)
+        ty = self.visit(node.value)
         if node.ref in self.env:
             # Subsequent uses of a variable must have the same type.
             self.constraints += [(ty, self.env[node.ref])]
@@ -277,7 +301,7 @@ class TypeInfer(object):
 
     def visit_Index(self, node):
         tv = self.fresh()
-        ty = self.visit(node.val)
+        ty = self.visit(node.value)
         ixty = self.visit(node.ix)
         self.constraints += [(ty, array(tv)), (ixty, int64)]
         return tv
@@ -285,12 +309,7 @@ class TypeInfer(object):
     def visit_Prim(self, node):
         if node.fn == 'shape#':
             return array(int64)
-        elif node.fn == 'mult#':
-            tya = self.visit(node.args[0])
-            tyb = self.visit(node.args[1])
-            self.constraints += [(tya, tyb)]
-            return tyb
-        elif node.fn == 'add#':
+        elif node.fn in llvm_prim_ops:
             tya = self.visit(node.args[0])
             tyb = self.visit(node.args[1])
             self.constraints += [(tya, tyb)]
@@ -301,11 +320,19 @@ class TypeInfer(object):
     def visit_Var(self, node):
         ty = self.env[node.id]
         node.type = ty
+        print(ast.dump(node))
         return ty
 
     def visit_Return(self, node):
-        ty = self.visit(node.val)
+        ty = self.visit(node.value)
         self.constraints += [(ty, self.retty)]
+
+    def visit_Constant(self, node):
+        if isinstance(node.value, int):
+            return int64
+        elif isinstance(node.value, float):
+            return float32
+        raise NotImplementedError(node.value)
 
     def visit_Loop(self, node):
         self.env[node.var.id] = int64
@@ -370,7 +397,7 @@ def apply(s, t):
         return s.get(t.s, t)
 
 
-def applyList(s, xs):
+def apply_list(s, xs):
     return [(apply(s, x), apply(s, y)) for (x, y) in xs]
 
 
@@ -402,7 +429,7 @@ def solve(xs):
         (a, b) = cs.pop()
         s = unify(a, b)
         mgu = compose(s, mgu)
-        cs = deque(applyList(s, cs))
+        cs = deque(apply_list(s, cs))
     return mgu
 
 
@@ -478,14 +505,14 @@ class PythonVisitor(ast.NodeVisitor):
         op_str = node.op.__class__
         a = self.visit(node.left)
         b = self.visit(node.right)
-        opname = primops[op_str]
+        opname = prim_ops[op_str]
         return Prim(opname, [a, b])
 
     def visit_Assign(self, node):
         assert len(node.targets) == 1
         var = node.targets[0].id
-        val = self.visit(node.value)
-        return Assign(var, val)
+        value = self.visit(node.value)
+        return Assign(var, value)
 
     def visit_FunctionDef(self, node):
         stmts = list(node.body)
@@ -498,22 +525,31 @@ class PythonVisitor(ast.NodeVisitor):
         return Noop()
 
     def visit_Return(self, node):
-        val = self.visit(node.value)
-        return Return(val)
+        value = self.visit(node.value)
+        return Return(value)
+
+    def visit_Constant(self, node):
+        if isinstance(node.value, bool):
+            return LitBool(node.value)
+        elif isinstance(node.value, int):
+            return LitInt(node.value)
+        elif isinstance(node.value, float):
+            return LitFloat(node.value)
+        raise NotImplementedError(node)
 
     def visit_Attribute(self, node):
         if node.attr == 'shape':
-            val = self.visit(node.value)
-            return Prim('shape#', [val])
+            value = self.visit(node.value)
+            return Prim('shape#', [value])
         else:
             raise NotImplementedError(ast.dump(node))
 
     def visit_Subscript(self, node):
         if isinstance(node.ctx, ast.Load):
             if node.slice:
-                val = self.visit(node.value)
+                value = self.visit(node.value)
                 ix = self.visit(node.slice)
-                return Index(val, ix)
+                return Index(value, ix)
         elif isinstance(node.ctx, ast.Store):
             raise NotImplementedError(ast.dump(node))
 
@@ -547,10 +583,12 @@ class PythonVisitor(ast.NodeVisitor):
         #     return Loop(target, LitInt(0, type=int64), args[0], stmts)
         # elif len(args) == 2:  # xrange(n,m)
         #     return Loop(target, args[0], args[1], stmts)
+        return node
 
     def visit_Compare(self, node):
         print('visit_Compare')
         print(ast.dump(node))
+        return node
 
     def visit_AugAssign(self, node):
         if isinstance(node.op, ast.Add):
@@ -571,6 +609,10 @@ class PythonVisitor(ast.NodeVisitor):
         elif isinstance(node.value, bool):
             return LitBool(node.value)
         raise NotImplementedError(ast.dump(node))
+    
+    # def visit_Expr(self, node):
+
+    #     return 
 
     def generic_visit(self, node):
         raise NotImplementedError(ast.dump(node))
@@ -652,7 +694,7 @@ lltypes_map = {
 
 
 def to_lltype(ptype):
-    return lltypes_map[ptype]
+    return lltypes_map.get(ptype, int64_type)
 
 
 def determined(ty):
@@ -701,23 +743,23 @@ class LLVMEmitter(object):
     def branch(self, next_block):
         self.builder.branch(next_block)
 
-    def specialize(self, val):
-        if isinstance(val.type, TVar):
-            print('specialize', val.type.s)
-            return to_lltype(self.spec_types[val.type.s])
+    def specialize(self, value):
+        if isinstance(value.type, TVar):
+            print('specialize', value.type.s)
+            return to_lltype(self.spec_types[value.type.s])
         else:
-            return val.type
+            return value.type
 
-    def const(self, val):
-        if isinstance(val, int):
-            return ir.Constant(int64_type, val)
-        elif isinstance(val, float):
-            return ir.Constant(double_type, val)
-        elif isinstance(val, bool):
-            return ir.Constant(bool_type, int(val))
-        elif isinstance(val, str):
+    def const(self, value):
+        if isinstance(value, int):
+            return ir.Constant(int64_type, value)
+        elif isinstance(value, float):
+            return ir.Constant(double_type, value)
+        elif isinstance(value, bool):
+            return ir.Constant(bool_type, int(value))
+        elif isinstance(value, str):
             # raise NotImplementedError
-            return lc.Constant.stringz(val)
+            return lc.Constant.stringz(value)
         else:
             raise NotImplementedError
 
@@ -782,25 +824,25 @@ class LLVMEmitter(object):
         self.end_function()
 
     def visit_Index(self, node):
-        if isinstance(node.val, Var) and node.val.id in self.arrays:
-            val = self.visit(node.val)
+        if isinstance(node.value, Var) and node.value.id in self.arrays:
+            value = self.visit(node.value)
             ix = self.visit(node.ix)
-            dataptr = self.arrays[node.val.id]['data']
+            dataptr = self.arrays[node.value.id]['data']
             ret = self.builder.gep(dataptr, [ix])
             return self.builder.load(ret)
         else:
-            val = self.visit(node.val)
+            value = self.visit(node.value)
             ix = self.visit(node.ix)
-            ret = self.builder.gep(val, [ix])
+            ret = self.builder.gep(value, [ix])
             return self.builder.load(ret)
 
     def visit_Var(self, node):
         return self.builder.load(self.locals[node.id])
 
     def visit_Return(self, node):
-        val = self.visit(node.val)
-        if val.type != void_type:
-            self.builder.store(val, self.locals['retval'])
+        value = self.visit(node.value)
+        if value.type != void_type:
+            self.builder.store(value, self.locals['retval'])
         self.builder.branch(self.exit_block)
 
     def visit_Loop(self, node):
@@ -845,7 +887,9 @@ class LLVMEmitter(object):
             ref = node.args[0]
             shape = self.arrays[ref.id]['shape']
             return shape
-        elif node.fn == 'mult#':
+        elif node.fn not in llvm_prim_ops:
+                raise NotImplementedError(ast.dump(node))
+        if node.fn == 'mult#':
             a = self.visit(node.args[0])
             b = self.visit(node.args[1])
             if a.type == double_type:
@@ -859,29 +903,123 @@ class LLVMEmitter(object):
                 return self.builder.fadd(a, b)
             else:
                 return self.builder.add(a, b)
-        else:
-            raise NotImplementedError(ast.dump(node))
+        elif node.fn == 'sub#':
+            a = self.visit(node.args[0])
+            b = self.visit(node.args[1])
+            if a.type == double_type:
+                return self.builder.fsub(a, b)
+            else:
+                return self.builder.sub(a, b)
+        elif node.fn == 'div#':
+            a = self.visit(node.args[0])
+            b = self.visit(node.args[1])
+            if a.type == double_type:
+                return self.builder.fdiv(a, b)
+            else:
+                return self.builder.sdiv(a, b)
+        elif node.fn == 'mod#':
+            a = self.visit(node.args[0])
+            b = self.visit(node.args[1])
+            if a.type == double_type:
+                return self.builder.frem(a, b)
+            else:
+                return self.builder.srem(a, b)
+        elif node.fn == 'lt#':
+            a = self.visit(node.args[0])
+            b = self.visit(node.args[1])
+            if a.type == double_type:
+                return self.builder.fcmp_unordered('<', a, b)
+            else:
+                return self.builder.icmp_signed('<', a, b)
+        elif node.fn == 'gt#':
+            a = self.visit(node.args[0])
+            b = self.visit(node.args[1])
+            if a.type == double_type:
+                return self.builder.fcmp_unordered('>', a, b)
+            else:
+                return self.builder.icmp_signed('>', a, b)
+        elif node.fn == 'le#':
+            a = self.visit(node.args[0])
+            b = self.visit(node.args[1])
+            if a.type == double_type:
+                return self.builder.fcmp_unordered('<=', a, b)
+            else:
+                return self.builder.icmp_signed('<=', a, b)
+        elif node.fn == 'ge#':
+            a = self.visit(node.args[0])
+            b = self.visit(node.args[1])
+            if a.type == double_type:
+                return self.builder.fcmp_unordered('>=', a, b)
+            else:
+                return self.builder.icmp_signed('>=', a, b)
+        elif node.fn == 'eq#':
+            a = self.visit(node.args[0])
+            b = self.visit(node.args[1])
+            if a.type == double_type:
+                return self.builder.fcmp_unordered('==', a, b)
+            else:
+                return self.builder.icmp_signed('==', a, b)
+        elif node.fn == 'neq#':
+            a = self.visit(node.args[0])
+            b = self.visit(node.args[1])
+            if a.type == double_type:
+                return self.builder.fcmp_unordered('!=', a, b)
+            else:
+                return self.builder.icmp_signed('!=', a, b)
+        elif node.fn == 'and#':
+            a = self.visit(node.args[0])
+            b = self.visit(node.args[1])
+            return self.builder.and_(a, b)
+        elif node.fn == 'or#':
+            a = self.visit(node.args[0])
+            b = self.visit(node.args[1])
+            return self.builder.or_(a, b)
+        elif node.fn == 'not#':
+            a = self.visit(node.args[0])
+            return self.builder.not_(a)
+        elif node.fn == 'neg#':
+            a = self.visit(node.args[0])
+            if a.type == double_type:
+                return self.builder.fsub(self.const(0), a)
+            else:
+                return self.builder.sub(self.const(0), a)
+        elif node.fn == 'pow#':
+            # a = self.visit(node.args[0])
+            # b = self.visit(node.args[1])
+            # return self.builder.call(pow_func, [a, b])
+            raise NotImplementedError('pow#', ast.dump(node))
+
 
     def visit_Assign(self, node):
         # Subsequent assignment
         if node.ref in self.locals:
             name = node.ref
             var = self.locals[name]
-            val = self.visit(node.val)
-            self.builder.store(val, var)
+            value = self.visit(node.value)
+            self.builder.store(value, var)
             self.locals[name] = var
             return var
 
         # First assignment
         else:
             name = node.ref
-            val = self.visit(node.val)
+            value = self.visit(node.value)
             ty = self.specialize(node)
             var = self.builder.alloca(ty, name=name)
-            # print('visit_Assign', type(node.val), node.val, var, sep='???')
-            self.builder.store(val, var)
+            # print('visit_Assign', type(node.value), node.value, var, sep='???')
+            self.builder.store(value, var)
             self.locals[name] = var
             return var
+
+    def visit_NoneType(self, node):
+        return None
+
+
+    def visit_If(self, node):
+        test = self.visit(node.test)
+        
+        # TODO:
+
 
     def visit(self, node):
         name = f'visit_{type(node).__name__}'
@@ -889,6 +1027,9 @@ class LLVMEmitter(object):
             return getattr(self, name)(node)
         else:
             return self.generic_visit(node)
+
+    def generic_visit(self, node):
+        raise NotImplementedError(ast.dump(node))
 
 ### == Type Mapping ==
 
@@ -981,13 +1122,13 @@ def wrap_ndarray(na):
     return (data, dims, shape)
 
 
-def wrap_arg(arg, val):
-    if isinstance(val, np.ndarray):
+def wrap_arg(arg, value):
+    if isinstance(value, np.ndarray):
         ndarray = arg._type_
-        data, dims, shape = wrap_ndarray(val)
+        data, dims, shape = wrap_ndarray(value)
         return ndarray(data, dims, shape)
     else:
-        return val
+        return value
 
 
 def dispatcher(fn):
@@ -1020,6 +1161,7 @@ def autojit(fn):
     transformer = PythonVisitor()
     ast = transformer(fn)
     (ty, mgu) = typeinfer(ast)
+    print('ty:', ty, '\nmgu:', mgu)
     debug(dump(ast))
     return specialize(ast, ty, mgu)
 
@@ -1051,7 +1193,8 @@ def specialize(ast, infer_ty, mgu):
         argtys = [apply(specializer, ty) for ty in types]
         debug('Specialized Function:', TFun(argtys, retty))
 
-        if determined(retty) and all(map(determined, argtys)):
+        print(retty)
+        if determined(retty) or all(map(determined, argtys)):
             key = mangler(ast.fname, argtys)
             # Don't recompile after we've specialized.
             if key in function_cache:
@@ -1081,6 +1224,7 @@ def codegen(ast, specializer, retty, argtys):
     cgen = LLVMEmitter(specializer, retty, argtys)
     cgen.visit(ast)
 
+    print(str(module))
     mod = llvm.parse_assembly(str(module))
     mod.verify()
 
