@@ -230,7 +230,7 @@ class TypeInfer(object):
 
     def visit_Const(self, node):
         if isinstance(node.val, int):
-            ty = int64
+            ty = int32
         elif isinstance(node.val, float):
             ty = double64
         elif isinstance(node.val, bool):
@@ -308,7 +308,7 @@ class TypeInfer(object):
         begin = self.visit(node.begin)
         end = self.visit(node.end)
         self.constraints += [(varty, int32), (
-            begin, int64), (end, int32)]
+            begin, int32), (end, int32)]
         list(map(self.visit, node.body))
 
     def generic_visit(self, node):
@@ -483,7 +483,7 @@ class PythonVisitor(ast.NodeVisitor):
         if isinstance(node.ctx, ast.Load):
             if node.slice:
                 val = self.visit(node.value)
-                ix = self.visit(node.slice.value)
+                ix = self.visit(node.slice)
                 return Index(val, ix)
         elif isinstance(node.ctx, ast.Store):
             raise NotImplementedError
@@ -552,6 +552,7 @@ def dump(node):
 
 pointer     = ir.PointerType
 int_type    = ir.IntType(32)
+int64_type  = ir.IntType(64)
 float_type  = ir.FloatType()
 double_type = ir.DoubleType()
 bool_type   = ir.IntType(32)
@@ -567,19 +568,19 @@ def array_type(elt_type):
 
     # If not, initialize it.
     struct_type.set_body(
-        pointer(elt_type),        # data
-        ir.IntType(32),           # dimensions
-        pointer(ir.IntType(32)),  # shape
+        pointer(elt_type),      # data
+        int_type,               # dimensions
+        pointer(int_type),      # shape
     )
     return struct_type
 
 int32_array = pointer(array_type(int_type))
-int64_array = pointer(array_type(ir.IntType(64)))
+int64_array = pointer(array_type(int64_type))
 double_array = pointer(array_type(double_type))
 
 lltypes_map = {
     int32          : int_type,
-    int64          : int_type,
+    int64          : int64_type,
     float32        : float_type,
     double64       : double_type,
     array_int32    : int32_array,
@@ -639,8 +640,9 @@ class LLVMEmitter(object):
     def specialize(self, val):
         if isinstance(val.type, TVar):
             return to_lltype(self.spec_types[val.type.s])
-        else:
-            return val.type
+        elif isinstance(val.type, TCon):
+            return to_lltype(val.type)
+        return val.type
 
     def const(self, val):
         if isinstance(val, bool):
@@ -662,6 +664,8 @@ class LLVMEmitter(object):
         ty = self.specialize(node)
         if ty is double_type:
             return ir.Constant(double_type, node.n)
+        elif ty == int64_type:
+            return ir.Constant(int64_type, node.n)
         elif ty == int_type:
             return ir.Constant(int_type, node.n)
 
@@ -669,6 +673,8 @@ class LLVMEmitter(object):
         ty = self.specialize(node)
         if ty is double_type:
             return ir.Constant(double_type, node.n)
+        elif ty == int64_type:
+            return ir.Constant(int64_type, node.n)
         elif ty == int_type:
             return ir.Constant(int_type, node.n)
 
@@ -831,6 +837,7 @@ class LLVMEmitter(object):
 # the appropriate C types for our JIT'd function at runtime.
 _nptypemap = {
     'i': ctypes.c_int,
+    'l': ctypes.c_long,
     'f': ctypes.c_float,
     'd': ctypes.c_double,
 }
